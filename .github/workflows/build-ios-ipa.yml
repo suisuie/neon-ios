@@ -1,0 +1,86 @@
+name: build-ios-ipa
+
+# 在 GitHub 的免费 macOS 机器上编译出未签名的 .ipa。
+# 不需要自己有 Mac：网页上点一下，跑完在 Artifacts 里下载。
+#
+# 用法：
+#   1. 建一个 GitHub 仓库（public 或 private 都行）
+#   2. 把 shooter/ios 目录里的东西全部上传到仓库根目录（网页拖拽即可）
+#   3. 仓库 → Actions → build-ios-ipa → Run workflow
+#   4. 跑完点进这次运行，最下面 Artifacts → Shooter-unsigned-ipa → 下载 zip，
+#      解压得到 Shooter-unsigned.ipa
+#
+# 装到 iPhone：Windows 上用 Sideloadly（或 AltStore），登录自己的 Apple ID 签一次即可。
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  ipa:
+    name: Build unsigned IPA
+    runs-on: macos-14
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Locate project
+        id: find
+        run: |
+          set -e
+          PROJ=$(find . -maxdepth 4 -type d -name "*.xcodeproj" | head -1)
+          if [ -z "$PROJ" ]; then
+            echo "找不到 .xcodeproj，请把 Shooter.xcodeproj 和 Shooter/ 一起上传到仓库根目录"
+            exit 1
+          fi
+          DIR=$(dirname "$PROJ")
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+          echo "proj=$(basename "$PROJ")" >> "$GITHUB_OUTPUT"
+          echo "工程目录: $DIR / $(basename "$PROJ")"
+
+      - name: Build (unsigned)
+        run: |
+          set -euo pipefail
+          cd "${{ steps.find.outputs.dir }}"
+          xcodebuild \
+            -project "${{ steps.find.outputs.proj }}" \
+            -scheme Shooter \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            -destination "generic/platform=iOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            PRODUCT_BUNDLE_IDENTIFIER="com.suicode.shooter" \
+            build
+
+      - name: Package .ipa
+        run: |
+          set -euo pipefail
+          cd "${{ steps.find.outputs.dir }}"
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
+          if [ -z "$APP" ]; then echo "编译产物里没有 .app"; exit 1; fi
+          echo "app: $APP"
+          rm -rf Payload Shooter-unsigned.ipa
+          mkdir -p Payload
+          cp -R "$APP" Payload/Shooter.app
+          zip -qry Shooter-unsigned.ipa Payload
+          rm -rf Payload
+          ls -lh Shooter-unsigned.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Shooter-unsigned-ipa
+          path: ${{ steps.find.outputs.dir }}/Shooter-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
