@@ -16,16 +16,19 @@ REPO="${REPO:-neon-ios}"
 TOKEN="${1:-${GH_TOKEN:-}}"
 API="https://api.github.com"
 
+if [ -z "$TOKEN" ]; then
+  printf '粘贴 GitHub Token（输入不会显示，也不会保存到聊天）：'
+  IFS= read -r -s TOKEN
+  printf '\n'
+fi
+
 red()  { printf '\033[1;31m%s\033[0m\n' "$*"; }
 grn()  { printf '\033[1;32m%s\033[0m\n' "$*"; }
 cyn()  { printf '\033[1;36m%s\033[0m\n' "$*"; }
 step() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 
 if [ -z "$TOKEN" ]; then
-  red "缺少 Token。"
-  echo "用法: bash push_and_build.sh ghp_xxxxxxxx"
-  echo "拿 Token: 浏览器打开 https://github.com/settings/tokens/new"
-  echo "  勾选 repo 和 workflow 两项，生成后复制那串 ghp_ 开头的字符"
+  red "没有输入 Token。"
   exit 1
 fi
 

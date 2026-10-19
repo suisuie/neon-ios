@@ -1,0 +1,158 @@
+name: sign-ios-ipa
+
+# 在 GitHub 的 macOS 机器上把 ipa 签成可以直接装的那种。
+#
+# 用法（全程手机也能操作）：
+#   1. 准备两样东西（买证书时会一起给你）：
+#        · 证书        xxx.p12        （带私钥，有密码）
+#        · 描述文件    xxx.mobileprovision
+#   2. 把它们转成 base64 文本：
+#        Mac/Linux: base64 -i cert.p12 | pbcopy
+#        或者用任意在线工具 / Termux 的 base64 -w0 cert.p12
+#   3. 仓库 → Settings → Secrets and variables → Actions → New repository secret
+#        名字                     值
+#        CERT_P12_BASE64          证书 p12 的 base64
+#        CERT_PASSWORD            p12 的密码
+#        PROVISION_BASE64         描述文件的 base64
+#        （可选）KEYCHAIN_PASSWORD  随便填一串，只用于临时钥匙串
+#   4. 仓库 → Actions → sign-ios-ipa → Run workflow
+#   5. 跑完在 Artifacts 下载 Shooter-signed-ipa，里面是签好名的 ipa
+#
+# 没有这些 secret 时，本工作流会只做编译并提示缺少证书，不会失败。
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sign:
+    name: Build and sign IPA
+    runs-on: macos-14
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Locate project
+        id: find
+        run: |
+          set -e
+          PROJ=$(find . -maxdepth 4 -type d -name "*.xcodeproj" | head -1)
+          [ -n "$PROJ" ] || { echo "找不到 .xcodeproj"; exit 1; }
+          echo "dir=$(dirname "$PROJ")" >> "$GITHUB_OUTPUT"
+          echo "proj=$(basename "$PROJ")" >> "$GITHUB_OUTPUT"
+
+      - name: Build (unsigned)
+        run: |
+          set -euo pipefail
+          cd "${{ steps.find.outputs.dir }}"
+          xcodebuild \
+            -project "${{ steps.find.outputs.proj }}" \
+            -scheme Shooter -configuration Release -sdk iphoneos \
+            -derivedDataPath build -destination "generic/platform=iOS" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            PRODUCT_BUNDLE_IDENTIFIER="com.suicode.shooter" \
+            build
+
+      - name: Check signing secrets
+        id: check
+        run: |
+          if [ -n "${{ secrets.CERT_P12_BASE64 }}" ] && [ -n "${{ secrets.PROVISION_BASE64 }}" ]; then
+            echo "have=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "have=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::没有配置 CERT_P12_BASE64 / PROVISION_BASE64，本次只输出未签名 ipa。"
+            echo "看仓库根目录 签名步骤.md 的第 3 步配置 secret。"
+          fi
+
+      - name: Import certificate
+        if: steps.check.outputs.have == 'true'
+        run: |
+          set -euo pipefail
+          KC_PASS="${{ secrets.KEYCHAIN_PASSWORD }}"
+          [ -n "$KC_PASS" ] || KC_PASS="$(openssl rand -hex 12)"
+          echo "KC_PASS=$KC_PASS" >> "$GITHUB_ENV"
+          echo "KC=$RUNNER_TEMP/sign.keychain-db" >> "$GITHUB_ENV"
+
+          echo "${{ secrets.CERT_P12_BASE64 }}" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          echo "${{ secrets.PROVISION_BASE64 }}" | base64 --decode > "$RUNNER_TEMP/profile.mobileprovision"
+
+          security create-keychain -p "$KC_PASS" "$RUNNER_TEMP/sign.keychain-db"
+          security set-keychain-settings -lut 3600 "$RUNNER_TEMP/sign.keychain-db"
+          security unlock-keychain -p "$KC_PASS" "$RUNNER_TEMP/sign.keychain-db"
+          security import "$RUNNER_TEMP/cert.p12" -k "$RUNNER_TEMP/sign.keychain-db" \
+            -P "${{ secrets.CERT_PASSWORD }}" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KC_PASS" "$RUNNER_TEMP/sign.keychain-db" >/dev/null
+          security list-keychains -d user -s "$RUNNER_TEMP/sign.keychain-db" login.keychain-db
+
+      - name: Read provisioning profile
+        if: steps.check.outputs.have == 'true'
+        id: prov
+        run: |
+          set -euo pipefail
+          security cms -D -i "$RUNNER_TEMP/profile.mobileprovision" > "$RUNNER_TEMP/profile.plist"
+          NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$RUNNER_TEMP/profile.plist")
+          APPID=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$RUNNER_TEMP/profile.plist")
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "appid=$APPID" >> "$GITHUB_OUTPUT"
+          echo "描述文件: $NAME"
+          echo "App ID  : $APPID"
+
+      - name: Sign
+        if: steps.check.outputs.have == 'true'
+        run: |
+          set -euo pipefail
+          cd "${{ steps.find.outputs.dir }}"
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
+          [ -n "$APP" ] || { echo "没有 .app"; exit 1; }
+
+          mkdir -p "$RUNNER_TEMP/Profile"
+          cp "$RUNNER_TEMP/profile.mobileprovision" "$APP/embedded.mobileprovision"
+
+          /usr/libexec/PlistBuddy -c 'Print :Entitlements' "$RUNNER_TEMP/profile.plist" \
+            > "$RUNNER_TEMP/entitlements.plist"
+
+          # 用描述文件里的 App ID 覆盖 Bundle ID，避免证书和包名不匹配
+          APPID="${{ steps.prov.outputs.appid }}"
+          IDPART="${APPID#*.}"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $IDPART" "$APP/Info.plist"
+
+          IDENTITY=$(security find-identity -v -p codesigning | sed -n 's/.*"\(.*\)".*/\1/p' | head -1)
+          echo "签名身份: $IDENTITY"
+          codesign --force --timestamp=none --sign "$IDENTITY" \
+            --entitlements "$RUNNER_TEMP/entitlements.plist" \
+            --generate-entitlement-der "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP" || true
+
+          rm -rf Payload Shooter-signed.ipa
+          mkdir -p Payload
+          cp -R "$APP" Payload/Shooter.app
+          zip -qry Shooter-signed.ipa Payload
+          rm -rf Payload
+          ls -lh Shooter-signed.ipa
+
+      - name: Package unsigned (when no certificate)
+        if: steps.check.outputs.have != 'true'
+        run: |
+          set -euo pipefail
+          cd "${{ steps.find.outputs.dir }}"
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
+          rm -rf Payload Shooter-signed.ipa
+          mkdir -p Payload
+          cp -R "$APP" Payload/Shooter.app
+          zip -qry Shooter-signed.ipa Payload
+          rm -rf Payload
+          ls -lh Shooter-signed.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Shooter-signed-ipa
+          path: ${{ steps.find.outputs.dir }}/Shooter-signed.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Cleanup keychain
+        if: always() && steps.check.outputs.have == 'true'
+        run: security delete-keychain "$RUNNER_TEMP/sign.keychain-db" || true
