@@ -49,7 +49,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A1000000000000000000015 /* Controls.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000014 /* Controls.swift */; };
 		A1000000000000000000012 /* OpenGLES.framework in Frameworks */,
 				A1000000000000000000013 /* AVFoundation.framework in Frameworks */,
 				A1000000000000000000014 /* QuartzCore.framework in Frameworks */,
@@ -82,7 +81,7 @@
 				B1000000000000000000009 /* Net.swift */,
 				B1000000000000000000010 /* Sfx.swift */,
 				B1000000000000000000011 /* JavaRandom.swift */,
-				B1000000000000000000014 /* Controls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Controls.swift; sourceTree = "<group>"; };
+				B1000000000000000000014 /* Controls.swift */,
 		B1000000000000000000012 /* Info.plist */,
 			);
 			path = Shooter;
