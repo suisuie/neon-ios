@@ -32,6 +32,12 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
+      - name: List schemes
+        run: |
+          set -e
+          PROJ=$(find . -maxdepth 4 -type d -name "*.xcodeproj" | head -1)
+          xcodebuild -project "$PROJ" -list
+
       - name: Locate project
         id: find
         run: |
