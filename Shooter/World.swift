@@ -1476,7 +1476,7 @@ final class World {
             return
         }
 
-        let lowHp = e.type == World.botType && e.hp < Float(e.maxHp) * 0.35
+        let lowHp = e.type == World.botType && Float(e.hp) < Float(e.maxHp) * 0.35
         let med = lowHp ? nearestPickup(e.x, e.z, World.pkHealth) : -1
         if sees {
             e.yaw = World.turnTo(e.yaw, toT, dt * (3.5 + 3 * e.skill))
@@ -2220,10 +2220,10 @@ final class World {
             let x = r.float(), z = r.float(), yaw = r.float(), pitch = r.float()
             let hp = Int(Int16(bitPattern: r.short()))
             let alive = r.bool()
-            let kills = Int(UInt16(bitPattern: r.short()))
+            let kills = Int(r.short())
             let py = r.float()
             let crouch = r.bool()
-            let deaths = Int(UInt16(bitPattern: r.short()))
+            let deaths = Int(r.short())
             let team = Int(r.byte())
             let online = r.bool()
             let weapon = Int(r.byte())

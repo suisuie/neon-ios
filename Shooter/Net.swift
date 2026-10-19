@@ -948,10 +948,10 @@ final class UDPSocket {
         var buf = [UInt8](repeating: 0, count: max)
         var from = sockaddr_in()
         var flen = socklen_t(MemoryLayout<sockaddr_in>.size)
-        let got = withUnsafeMutablePointer(to: &from) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+        let got = withUnsafeMutablePointer(to: &from) { fromPtr in
+            fromPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { saPtr in
                 buf.withUnsafeMutableBufferPointer { b in
-                    recvfrom(fd, b.baseAddress, max, 0, $0, &flen)
+                    recvfrom(fd, b.baseAddress, max, 0, saPtr, &flen)
                 }
             }
         }
